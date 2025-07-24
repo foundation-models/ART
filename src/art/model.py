@@ -1,5 +1,5 @@
 import httpx
-from openai import AsyncOpenAI, DefaultAsyncHttpxClient
+from openai import AsyncOpenAI, AsyncAzureOpenAI, DefaultAsyncHttpxClient
 from pydantic import BaseModel
 from typing import TYPE_CHECKING, cast, Generic, Iterable, Optional, overload, TypeVar
 from typing_extensions import Never
@@ -63,11 +63,16 @@ class Model(
     # If set, this will be used instead of `self.name` when calling the
     # inference endpoint.
     inference_model_name: str | None = None
+    
+    # --- Azure OpenAI specific configuration ---
+    azure_endpoint: str | None = None
+    azure_deployment: str | None = None
+    api_version: str | None = None
 
     _backend: Optional["Backend"] = None
     _s3_bucket: str | None = None
     _s3_prefix: str | None = None
-    _openai_client: AsyncOpenAI | None = None
+    _openai_client: AsyncOpenAI | AsyncAzureOpenAI | None = None
 
     def __init__(
         self,
@@ -78,6 +83,9 @@ class Model(
         inference_api_key: str | None = None,
         inference_base_url: str | None = None,
         inference_model_name: str | None = None,
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
         **kwargs: Never,
     ) -> None:
         super().__init__(
@@ -87,6 +95,9 @@ class Model(
             inference_api_key=inference_api_key,
             inference_base_url=inference_base_url,
             inference_model_name=inference_model_name,
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            api_version=api_version,
             **kwargs,
         )
 
@@ -100,6 +111,9 @@ class Model(
         inference_api_key: str | None = None,
         inference_base_url: str | None = None,
         inference_model_name: str | None = None,
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
     ) -> "Model[None]": ...
 
     @overload
@@ -112,6 +126,9 @@ class Model(
         inference_api_key: str | None = None,
         inference_base_url: str | None = None,
         inference_model_name: str | None = None,
+        azure_endpoint: str | None = None,
+        azure_deployment: str | None = None,
+        api_version: str | None = None,
     ) -> "Model[ModelConfig]": ...
 
     def __new__(
@@ -146,29 +163,57 @@ class Model(
 
     def openai_client(
         self,
-    ) -> AsyncOpenAI:
+    ) -> AsyncOpenAI | AsyncAzureOpenAI:
         if self._openai_client is not None:
             return self._openai_client
 
-        if self.inference_api_key is None or self.inference_base_url is None:
-            if self.trainable:
-                raise ValueError(
-                    "OpenAI client not yet available on this trainable model. You must call `model.register()` first."
-                )
-            else:
-                raise ValueError(
-                    "In order to create an OpenAI client you must provide an `inference_api_key` and `inference_base_url`."
-                )
-        openai_client = AsyncOpenAI(
-            base_url=self.inference_base_url,
-            api_key=self.inference_api_key,
-            http_client=DefaultAsyncHttpxClient(
-                timeout=httpx.Timeout(timeout=1200, connect=5.0),
-                limits=httpx.Limits(
-                    max_connections=100_000, max_keepalive_connections=100_000
+        # Check if Azure OpenAI configuration is provided
+        if self.azure_endpoint and self.azure_deployment:
+            if self.inference_api_key is None:
+                if self.trainable:
+                    raise ValueError(
+                        "Azure OpenAI client not yet available on this trainable model. You must call `model.register()` first."
+                    )
+                else:
+                    raise ValueError(
+                        "In order to create an Azure OpenAI client you must provide an `inference_api_key`."
+                    )
+            
+            openai_client = AsyncAzureOpenAI(
+                azure_endpoint=self.azure_endpoint,
+                azure_deployment=self.azure_deployment,
+                api_key=self.inference_api_key,
+                api_version=self.api_version or "2024-02-01",
+                http_client=DefaultAsyncHttpxClient(
+                    timeout=httpx.Timeout(timeout=1200, connect=5.0),
+                    limits=httpx.Limits(
+                        max_connections=100_000, max_keepalive_connections=100_000
+                    ),
                 ),
-            ),
-        )
+            )
+        else:
+            # Standard OpenAI client
+            if self.inference_api_key is None or self.inference_base_url is None:
+                if self.trainable:
+                    raise ValueError(
+                        "OpenAI client not yet available on this trainable model. You must call `model.register()` first."
+                    )
+                else:
+                    raise ValueError(
+                        "In order to create an OpenAI client you must provide an `inference_api_key` and `inference_base_url`."
+                    )
+            
+            openai_client = AsyncOpenAI(
+                base_url=self.inference_base_url,
+                api_key=self.inference_api_key,
+                http_client=DefaultAsyncHttpxClient(
+                    timeout=httpx.Timeout(timeout=1200, connect=5.0),
+                    limits=httpx.Limits(
+                        max_connections=100_000, max_keepalive_connections=100_000
+                    ),
+                ),
+            )
+        
         patch_openai(openai_client)
         self._openai_client = openai_client
 

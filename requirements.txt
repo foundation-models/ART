@@ -1,0 +1,6 @@
+dotenv
+typing_extensions
+httpx
+tqdm
+openai
+aiohttp
